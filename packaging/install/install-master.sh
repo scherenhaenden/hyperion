@@ -463,11 +463,22 @@ $out" ;;
 
 #-------- 1. Root + OS -----------------------------------------------------
 [[ $EUID -eq 0 ]] || fail "Run me as root."
-. /etc/os-release || fail "/etc/os-release missing — not a Debian-family box?"
-[[ "${ID:-}" == "debian" ]] || fail "Debian required (got '${ID:-unknown}')."
-VERSION_ID="${VERSION_ID:-}"   # absent on testing/sid
-[[ "$VERSION_ID" =~ ^[0-9]+ ]] && (( ${VERSION_ID%%.*} >= 12 )) \
-  || fail "Debian 12+ required (got ${VERSION_ID:-no VERSION_ID})."
+. /etc/os-release || fail "/etc/os-release missing — not a Debian/Ubuntu-family box?"
+
+OS_NAME="Debian"
+if [[ "${ID:-}" == "debian" ]]; then
+  OS_NAME="Debian"
+  VERSION_ID="${VERSION_ID:-}"   # absent on testing/sid
+  [[ "$VERSION_ID" =~ ^[0-9]+ ]] && (( ${VERSION_ID%%.*} >= 12 )) \
+    || fail "Debian 12+ required (got ${VERSION_ID:-no VERSION_ID})."
+elif [[ "${ID:-}" == "ubuntu" ]]; then
+  OS_NAME="Ubuntu"
+  VERSION_ID="${VERSION_ID:-}"
+  [[ "$VERSION_ID" =~ ^[0-9]+ ]] && (( ${VERSION_ID%%.*} >= 22 )) \
+    || fail "Ubuntu 22.04+ required (got ${VERSION_ID:-no VERSION_ID})."
+else
+  fail "Debian 12+ or Ubuntu 22.04+ required (got '${ID:-unknown} ${VERSION_ID:-}')."
+fi
 ARCH="$(uname -m)"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -487,7 +498,7 @@ email_re='^[^"\\[:space:]]*$'
 [[ "$CONTACT_EMAIL" =~ $email_re ]] || fail "HYPERION_ACME_EMAIL is not an email address: '$CONTACT_EMAIL'"
 
 echo
-echo "  Installing Hyperion on $(hostname) — Debian ${VERSION_ID}, ${ARCH}"
+echo "  Installing Hyperion on $(hostname) — ${OS_NAME} ${VERSION_ID}, ${ARCH}"
 echo
 
 #-------- 2. Port pre-flight -----------------------------------------------

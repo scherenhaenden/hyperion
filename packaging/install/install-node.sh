@@ -194,8 +194,16 @@ ask_port() {
 
 #-------- 1. OS check ------------------------------------------------------
 . /etc/os-release || fail "/etc/os-release missing."
-[[ "$ID" == "debian" ]] || fail "Debian required (got '$ID')."
-[[ "${VERSION_ID%%.*}" -ge 12 ]] || fail "Debian 12+ required (got $VERSION_ID)."
+OS_NAME="Debian"
+if [[ "$ID" == "debian" ]]; then
+  OS_NAME="Debian"
+  [[ "${VERSION_ID%%.*}" -ge 12 ]] || fail "Debian 12+ required (got $VERSION_ID)."
+elif [[ "$ID" == "ubuntu" ]]; then
+  OS_NAME="Ubuntu"
+  [[ "${VERSION_ID%%.*}" -ge 22 ]] || fail "Ubuntu 22.04+ required (got $VERSION_ID)."
+else
+  fail "Debian 12+ or Ubuntu 22.04+ required (got '$ID $VERSION_ID')."
+fi
 
 #-------- 1b. Component + port selection (before anything is installed) ----
 # nginx + PHP-FPM are always installed; MariaDB / PostgreSQL / vsftpd are
@@ -278,37 +286,36 @@ apt-get install -y -qq \
   nginx "${optional_pkgs[@]}"
 
 mkdir -p /etc/apt/keyrings
-# The suite MUST match this machine's Debian release. It was hardcoded to
-# `bookworm`, so a Debian 13 (trixie) box pulled bookworm-built PHP whose
-# `libzip4` dependency does not exist there — trixie ships libzip5 — and
-# apt aborted the whole install with "held broken packages".
-#
-# Derived from os-release, with `bookworm` as the fallback for a
-# derivative that reports its own codename (Ubuntu, Proxmox, Raspbian):
-# sury publishes only Debian suites, so an unknown name must degrade to a
-# real one rather than to a 404 repo.
 SURY_SUITE="$( . /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}" )"
-case "$SURY_SUITE" in
-  bookworm|trixie|forky) ;;
-  *) SURY_SUITE="bookworm" ;;
-esac
-
-SURY_LIST="/etc/apt/sources.list.d/sury-php.list"
-SURY_LINE="deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${SURY_SUITE} main"
-if [[ ! -f /etc/apt/keyrings/sury-php.gpg ]]; then
-  curl -fsSL https://packages.sury.org/php/apt.gpg \
-    -o /etc/apt/keyrings/sury-php.gpg
+if [[ "$ID" == "ubuntu" ]]; then
+  case "$SURY_SUITE" in
+    noble|jammy|focal) ;;
+    *) SURY_SUITE="noble" ;;
+  esac
+  SURY_LIST="/etc/apt/sources.list.d/ondrej-ubuntu-php.list"
+  SURY_KEYRING="/etc/apt/keyrings/sury-php.gpg"
+  SURY_LINE="deb [signed-by=$SURY_KEYRING] https://ppa.launchpadcontent.net/ondrej/php/ubuntu/ ${SURY_SUITE} main"
+  if [[ ! -s "$SURY_KEYRING" ]]; then
+    curl -fsSL --retry 3 --max-time 60 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6" \
+      | gpg --dearmor > "$SURY_KEYRING.tmp" \
+      && chmod 0644 "$SURY_KEYRING.tmp" && mv -f "$SURY_KEYRING.tmp" "$SURY_KEYRING"
+  fi
+else
+  case "$SURY_SUITE" in
+    bookworm|trixie|forky) ;;
+    *) SURY_SUITE="bookworm" ;;
+  esac
+  SURY_LIST="/etc/apt/sources.list.d/sury-php.list"
+  SURY_KEYRING="/etc/apt/keyrings/sury-php.gpg"
+  SURY_LINE="deb [signed-by=$SURY_KEYRING] https://packages.sury.org/php/ ${SURY_SUITE} main"
+  if [[ ! -f "$SURY_KEYRING" ]]; then
+    curl -fsSL https://packages.sury.org/php/apt.gpg \
+      -o "$SURY_KEYRING"
+  fi
 fi
-# Rewritten whenever it differs, NOT only when the keyring is missing.
-# Gating the whole block on the keyring meant a box that had already been
-# given the wrong suite kept it forever: re-running the installer skipped
-# the fix, and the operator had no way to repair it short of editing apt
-# sources by hand.
 if [[ ! -f "$SURY_LIST" ]] || ! grep -qxF "$SURY_LINE" "$SURY_LIST"; then
   echo "$SURY_LINE" > "$SURY_LIST"
-  # A suite switch leaves the old suite's package lists cached, and apt
-  # will happily keep resolving against them.
-  rm -rf /var/lib/apt/lists/packages.sury.org_*
+  rm -rf /var/lib/apt/lists/packages.sury.org_* /var/lib/apt/lists/ppa.launchpadcontent.net_*
   apt-get update -qq
 fi
 # Full extension set, not just -fpm/-cli: wp-cli `core download` needs

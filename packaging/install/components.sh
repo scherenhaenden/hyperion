@@ -172,54 +172,68 @@ apt_install() {
     "$@"
 }
 
-#-------- deb.sury.org (PHP) ------------------------------------------------
-# The suite MUST match this machine's Debian release. It was hardcoded to
-# `bookworm`, so a Debian 13 (trixie) box pulled bookworm-built PHP whose
-# `libzip4` dependency does not exist there — trixie ships libzip5 — and
-# apt aborted the whole install with "held broken packages".
-#
-# Derived from os-release, with `bookworm` as the fallback for a
-# derivative that reports its own codename (Ubuntu, Proxmox, Raspbian):
-# sury publishes only Debian suites, so an unknown name must degrade to a
-# real one rather than to a 404 repo.
+#-------- deb.sury.org / ppa:ondrej/php (PHP) --------------------------------
+# The suite MUST match this machine's release (Debian or Ubuntu).
 sury_suite() {
-  local suite
+  local id suite
+  id="$( . /etc/os-release 2>/dev/null; echo "${ID:-debian}" )"
   suite="$( . /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}" )"
-  case "$suite" in
-    bookworm|trixie|forky) ;;
-    *) suite="bookworm" ;;
-  esac
+  if [[ "$id" == "ubuntu" ]]; then
+    case "$suite" in
+      noble|jammy|focal) ;;
+      *) suite="noble" ;;
+    esac
+  else
+    case "$suite" in
+      bookworm|trixie|forky) ;;
+      *) suite="bookworm" ;;
+    esac
+  fi
   printf '%s' "$suite"
 }
 
 ensure_sury() {
-  local suite line
+  local id suite line key_url is_ubuntu=0
+  id="$( . /etc/os-release 2>/dev/null; echo "${ID:-debian}" )"
   suite="$(sury_suite)"
-  line="deb [signed-by=$SURY_KEYRING] https://packages.sury.org/php/ ${suite} main"
+
+  if [[ "$id" == "ubuntu" ]]; then
+    is_ubuntu=1
+    line="deb [signed-by=$SURY_KEYRING] https://ppa.launchpadcontent.net/ondrej/php/ubuntu/ ${suite} main"
+    key_url="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6"
+  else
+    line="deb [signed-by=$SURY_KEYRING] https://packages.sury.org/php/ ${suite} main"
+    key_url="$SURY_KEY_URL"
+  fi
+
   install -d -m 0755 "$(dirname "$SURY_KEYRING")" || return 1
   # Downloaded to a temp name and renamed: a download cut off half-way used
   # to leave an empty keyring behind, and since "the keyring exists" was the
   # test for "already done", no later run ever repaired it.
   if [[ ! -s "$SURY_KEYRING" ]]; then
-    log "Adding the deb.sury.org signing key ..."
-    if ! curl -fsSL --retry 3 --max-time 60 -o "$SURY_KEYRING.tmp" "$SURY_KEY_URL"; then
-      rm -f "$SURY_KEYRING.tmp"
-      warn "could not download $SURY_KEY_URL"
-      return 1
+    log "Adding the PHP signing key ..."
+    if (( is_ubuntu )); then
+      if ! curl -fsSL --retry 3 --max-time 60 "$key_url" | gpg --dearmor > "$SURY_KEYRING.tmp"; then
+        rm -f "$SURY_KEYRING.tmp"
+        warn "could not download PHP signing key from $key_url"
+        return 1
+      fi
+    else
+      if ! curl -fsSL --retry 3 --max-time 60 -o "$SURY_KEYRING.tmp" "$key_url"; then
+        rm -f "$SURY_KEYRING.tmp"
+        warn "could not download $key_url"
+        return 1
+      fi
     fi
     chmod 0644 "$SURY_KEYRING.tmp" && mv -f "$SURY_KEYRING.tmp" "$SURY_KEYRING" || return 1
   fi
   # Rewritten whenever it differs, NOT only when the keyring is missing.
-  # Gating the whole block on the keyring meant a box that had already been
-  # given the wrong suite kept it forever: re-running the installer skipped
-  # the fix, and the operator had no way to repair it short of editing apt
-  # sources by hand.
   if [[ ! -f "$SURY_LIST" ]] || ! grep -qxF "$line" "$SURY_LIST"; then
-    log "Pointing deb.sury.org at ${suite} ..."
+    log "Pointing PHP repository at ${suite} (${id}) ..."
     printf '%s\n' "$line" > "$SURY_LIST" || return 1
     # A suite switch leaves the old suite's package lists cached, and apt
     # will happily keep resolving against them.
-    rm -rf /var/lib/apt/lists/packages.sury.org_*
+    rm -rf /var/lib/apt/lists/packages.sury.org_* /var/lib/apt/lists/ppa.launchpadcontent.net_*
     APT_UPDATED=0
   fi
   return 0
